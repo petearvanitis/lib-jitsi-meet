@@ -926,15 +926,19 @@ export default class JingleSessionPC extends JingleSession {
      * added, before the offer/answer cycle executes (for the local track
      * addition to be an atomic operation together with the offer/answer).
      */
-    invite(localTracks) {
+    invite(localTracks = []) {
         if (!this.isInitiator) {
             throw new Error('Trying to invite from the responder session');
         }
         const workFunction = finishedCallback => {
+            const addTracks = [];
+
             for (const localTrack of localTracks) {
-                this.peerconnection.addTrack(localTrack, true /* isInitiator */);
+                addTracks.push(this.peerconnection.addTrack(localTrack, true /* isInitiator */));
             }
-            this.peerconnection.createOffer(this.mediaConstraints)
+
+            Promise.all(addTracks)
+                .then(() => this.peerconnection.createOffer(this.mediaConstraints))
                 .then(offerSdp => {
                     this.peerconnection.setLocalDescription(offerSdp)
                         .then(() => {
@@ -1038,13 +1042,12 @@ export default class JingleSessionPC extends JingleSession {
      * executes (for the local track addition to be an atomic operation together
      * with the offer/answer).
      */
-    setOfferAnswerCycle(jingleOfferAnswerIq, success, failure, localTracks) {
+    setOfferAnswerCycle(jingleOfferAnswerIq, success, failure, localTracks = []) {
         const workFunction = finishedCallback => {
+            const addTracks = [];
 
-            if (localTracks) {
-                for (const track of localTracks) {
-                    this.peerconnection.addTrack(track);
-                }
+            for (const track of localTracks) {
+                addTracks.push(this.peerconnection.addTrack(track));
             }
 
             const newRemoteSdp
@@ -1062,7 +1065,8 @@ export default class JingleSessionPC extends JingleSession {
                 this._bridgeSessionId = bridgeSessionId;
             }
 
-            this._renegotiate(newRemoteSdp.raw)
+            Promise.all(addTracks)
+                .then(() => this._renegotiate(newRemoteSdp.raw))
                 .then(() => {
                     if (this.state === JingleSessionState.PENDING) {
                         this.state = JingleSessionState.ACTIVE;
@@ -1919,29 +1923,27 @@ export default class JingleSessionPC extends JingleSession {
                             const newLocalSDP = new SDP(this.peerconnection.localDescription.sdp);
 
                             this.notifyMySSRCUpdate(new SDP(oldLocalSdp), newLocalSDP);
-                        },
-                        finishedCallback /* will be called with en error */);
+                        });
                     }
 
-                    promise.then(() => {
+                    return promise.then(() => {
                         if (newTrack && newTrack.isVideoTrack()) {
+                            // FIXME set all sender parameters in one go?
                             // Set the degradation preference on the new video sender.
-                            this.peerconnection.setSenderVideoDegradationPreference();
+                            return this.peerconnection.setSenderVideoDegradationPreference()
 
-                            // Apply the cached video constraints on the new video sender.
-                            this.peerconnection.setSenderVideoConstraint();
-
-                            // Configure max bitrate on the video sender when media is routed through JVB.
-                            if (!this.isP2P) {
-                                this.peerconnection.setMaxBitRate(newTrack);
-                            }
+                                // Apply the cached video constraints on the new video sender.
+                                .then(() => this.peerconnection.setSenderVideoConstraint())
+                                .then(() => {
+                                    // Configure max bitrate on the video sender when media is routed through JVB.
+                                    if (!this.isP2P) {
+                                        return this.peerconnection.setMaxBitRate(newTrack);
+                                    }
+                                });
                         }
-                        finishedCallback();
-                    }, finishedCallback /* will be called with en error */);
+                    });
                 })
-                .catch(err => {
-                    finishedCallback(err);
-                });
+                .then(finishedCallback, finishedCallback /* will be called with en error */);
         };
 
         return new Promise((resolve, reject) => {

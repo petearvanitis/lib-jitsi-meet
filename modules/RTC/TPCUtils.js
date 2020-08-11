@@ -207,8 +207,7 @@ export class TPCUtils {
     /**
     * Adds {@link JitsiLocalTrack} to the WebRTC peerconnection for the first time.
     * @param {JitsiLocalTrack} track - track to be added to the peerconnection.
-    * @returns {boolean} Returns true if the operation is successful,
-    * false otherwise.
+    * @returns {void}
     */
     addTrack(localTrack, isInitiator = true) {
         const track = localTrack.getTrack();
@@ -242,8 +241,7 @@ export class TPCUtils {
     /**
      * Adds a track on the RTCRtpSender as part of the unmute operation.
      * @param {JitsiLocalTrack} localTrack - track to be unmuted.
-     * @returns {Promise<boolean>} - Promise that resolves to false if unmute
-     * operation is successful, a reject otherwise.
+     * @returns {Promise<void>} - resolved when done.
      */
     addTrackUnmute(localTrack) {
         const mediaType = localTrack.getType();
@@ -266,19 +264,20 @@ export class TPCUtils {
 
             if (stream) {
                 this.pc.peerconnection.addStream(localTrack.getOriginalStream());
-                this.setEncodings(localTrack);
-                this.pc.localTracks.set(localTrack.rtcId, localTrack);
-                transceiver.direction = 'sendrecv';
+
+                return this.setEncodings(localTrack)
+                    .then(() => {
+                        this.pc.localTracks.set(localTrack.rtcId, localTrack);
+                        transceiver.direction = 'sendrecv';
+                    });
             }
 
-            return Promise.resolve(false);
+            return Promise.resolve();
         }
 
         return transceiver.sender.replaceTrack(track)
             .then(() => {
                 this.pc.localTracks.set(localTrack.rtcId, localTrack);
-
-                return Promise.resolve(false);
             });
     }
 
@@ -311,9 +310,7 @@ export class TPCUtils {
      * Replaces the existing track on a RTCRtpSender with the given track.
      * @param {JitsiLocalTrack} oldTrack - existing track on the sender that needs to be removed.
      * @param {JitsiLocalTrack} newTrack - new track that needs to be added to the sender.
-     * @returns {Promise<false>} Promise that resolves with false as we don't want
-     * renegotiation to be triggered automatically after this operation. Renegotiation is
-     * done when the browser fires the negotiationeeded event.
+     * @returns {Promise<void>} - resolved when done.
      */
     replaceTrack(oldTrack, newTrack) {
         if (oldTrack && newTrack) {
@@ -354,15 +351,15 @@ export class TPCUtils {
         } else if (newTrack && !oldTrack) {
             const ssrc = this.pc.localSSRCs.get(newTrack.rtcId);
 
-            if (!this.addTrackUnmute(newTrack)) {
-                return Promise.reject(new Error('replace track failed'));
-            }
-            newTrack.emit(JitsiTrackEvents.TRACK_MUTE_CHANGED, newTrack);
-            this.pc.localTracks.set(newTrack.rtcId, newTrack);
-            this.pc.localSSRCs.set(newTrack.rtcId, ssrc);
+            this.addTrackUnmute(newTrack)
+                .then(() => {
+                    newTrack.emit(JitsiTrackEvents.TRACK_MUTE_CHANGED, newTrack);
+                    this.pc.localTracks.set(newTrack.rtcId, newTrack);
+                    this.pc.localSSRCs.set(newTrack.rtcId, ssrc);
+                });
         }
 
-        return Promise.resolve(false);
+        return Promise.resolve();
     }
 
     /**
@@ -372,8 +369,7 @@ export class TPCUtils {
     * the connection should be kept alive.
     * @param {boolean} active - true to enable audio media transmission or
     * false to disable.
-    * @returns {false} - returns false always so that renegotiation is not automatically
-    * triggered after this operation.
+    * @returns {Promise<void>} - resolved when done.
     */
     setAudioTransferActive(active) {
         return this.setMediaTransferActive('audio', active);
@@ -383,6 +379,7 @@ export class TPCUtils {
      * Set the simulcast stream encoding properties on the RTCRtpSender.
      * @param {JitsiLocalTrack} track - the current track in use for which
      * the encodings are to be set.
+     * @returns {Promise<void>} - resolved when done.
      */
     setEncodings(track) {
         const transceiver = this.pc.peerconnection.getTransceivers()
@@ -390,7 +387,8 @@ export class TPCUtils {
         const parameters = transceiver.sender.getParameters();
 
         parameters.encodings = this._getStreamEncodings(track);
-        transceiver.sender.setParameters(parameters);
+
+        return transceiver.sender.setParameters(parameters);
     }
 
     /**
@@ -399,14 +397,15 @@ export class TPCUtils {
      * @param {String} mediaType - 'audio' or 'video'
      * @param {boolean} active - true to enable media transmission or false
      * to disable.
-     * @returns {false} - returns false always so that renegotiation is not automatically
-     * triggered after this operation
+     * @returns {Promise<void>} - resolved when done.
      */
     setMediaTransferActive(mediaType, active) {
         const transceivers = this.pc.peerconnection.getTransceivers()
             .filter(t => t.receiver && t.receiver.track && t.receiver.track.kind === mediaType);
         const localTracks = Array.from(this.pc.localTracks.values())
             .filter(track => track.getType() === mediaType);
+
+        const setParamPromises = [];
 
         if (active) {
             transceivers.forEach(transceiver => {
@@ -418,7 +417,7 @@ export class TPCUtils {
                         parameters.encodings.forEach(encoding => {
                             encoding.active = true;
                         });
-                        transceiver.sender.setParameters(parameters);
+                        setParamPromises.push(transceiver.sender.setParameters(parameters));
                     }
                 } else {
                     transceiver.direction = 'recvonly';
@@ -430,7 +429,7 @@ export class TPCUtils {
             });
         }
 
-        return false;
+        return Promise.all(setParamPromises);
     }
 
     /**
@@ -440,8 +439,7 @@ export class TPCUtils {
     * the connection should be kept alive.
     * @param {boolean} active - true to enable video media transmission or
     * false to disable.
-    * @returns {false} - returns false always so that renegotiation is not automatically
-    * triggered after this operation.
+    * @returns {Promise<void>} - resolved when done.
     */
     setVideoTransferActive(active) {
         return this.setMediaTransferActive('video', active);
