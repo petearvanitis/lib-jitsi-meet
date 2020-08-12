@@ -2059,7 +2059,8 @@ TraceablePeerConnection.prototype.setMaxBitRate = function(localTrack = null) {
             }
         });
 
-    return Promise.all(setSenderParamPromises);
+    return Promise.all(setSenderParamPromises)
+        .then(() => Promise.resolve());
 };
 
 TraceablePeerConnection.prototype.setRemoteDescription = function(description) {
